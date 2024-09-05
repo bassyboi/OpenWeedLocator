@@ -5,12 +5,13 @@ import imutils
 import zmq  # Import ZeroMQ
 import time
 import sys
-import logging  # Added
-import os  # Added
-import numpy as np  # Added
+import logging
+import os
+import numpy as np
+import socket  # Added for client-server communication
 from datetime import datetime
 from multiprocessing import Value, Process
-from threading import Thread  # Added
+from threading import Thread
 from configparser import ConfigParser
 from pathlib import Path
 from imutils.video import FPS
@@ -19,22 +20,23 @@ from utils.button_inputs import BasicController
 from utils.image_sampler import ImageRecorder
 from utils.blur_algorithms import fft_blur
 from utils.greenonbrown import GreenOnBrown
-from utils.greenongreen import GreenOnGreen  # Added
+from utils.greenongreen import GreenOnGreen
 from utils.relay_control import RelayController, StatusIndicator
 from utils.frame_reader import FrameReader
-from utils.error_handler import ErrorHandler  # Added
-from utils.custom_logger import setup_logger  # Added
+from utils.error_handler import ErrorHandler
+from utils.custom_logger import setup_logger
 
-def nothing(x):
-    pass
+# Define server host and port
+SERVER_HOST = '127.0.0.1'  # Replace with server's IP address if needed
+SERVER_PORT = 5000
 
 # Define CAN bus command codes and their corresponding actions
 CAN_COMMANDS = {
-    0x301: "pause",
-    0x302: "play",
-    0x303: "boom_flush",
-    0x304: "stop",
-    0x305: "save_config"
+    "pause": "pause",
+    "play": "play",
+    "boom_flush": "boom_flush",
+    "stop": "stop",
+    "save_config": "save_config"
 }
 
 # Define custom error types and codes
@@ -45,10 +47,10 @@ ERROR_CODES = {
     0x404: "Configuration Error"
 }
 
-class Owl:
+class OwlClient:
     def __init__(self, show_display=False, focus=False, input_file_or_directory=None, config_file='config/DAY_SENSITIVITY_2.ini'):
         # Initialize logging
-        setup_logger()  # Added custom logger setup
+        setup_logger()
 
         # Initialize configuration
         self._config_path = Path(__file__).parent / config_file
@@ -77,8 +79,40 @@ class Owl:
         # Initialize image sampling configuration
         self._setup_image_sampling()
 
-        # Initialize ZeroMQ context for CAN bus communication
-        self._setup_can_bus()
+        # Initialize client socket for server communication
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.connect_to_server()
+
+    def connect_to_server(self):
+        """ Connect to the PyQt5 server. """
+        try:
+            self.client_socket.connect((SERVER_HOST, SERVER_PORT))
+            print(f"Connected to server at {SERVER_HOST}:{SERVER_PORT}")
+            # Start a thread to listen for commands from the server
+            Thread(target=self.listen_for_commands, daemon=True).start()
+        except Exception as e:
+            print(f"Failed to connect to server: {e}")
+            sys.exit(1)
+
+    def listen_for_commands(self):
+        """ Listen for commands from the server and execute them. """
+        while True:
+            try:
+                command = self.client_socket.recv(1024).decode()
+                if command:
+                    print(f"Received command: {command}")
+                    self.execute_can_command(command)
+            except Exception as e:
+                print(f"Error receiving command: {e}")
+                break
+
+    def send_status_to_server(self, status_message):
+        """ Send status messages back to the server. """
+        try:
+            self.client_socket.send(status_message.encode())
+            print(f"[STATUS] Sent to server: {status_message}")
+        except Exception as e:
+            print(f"Error sending status to server: {e}")
 
     def _setup_controller(self):
         """ Setup button controller and related multiprocessing """
@@ -143,44 +177,11 @@ class Owl:
                 self.report_error(0x404, f"Configuration error during image sampling setup: {e}")
                 self.stop()
 
-    def _setup_can_bus(self):
-        """ Setup ZeroMQ context for CAN bus communication """
-        self.zmq_context = zmq.Context()
-
-        # Subscriber for receiving CAN commands
-        self.zmq_subscriber = self.zmq_context.socket(zmq.SUB)
-        self.zmq_subscriber.connect("tcp://localhost:5555")  # Replace with your publisher's address
-        self.zmq_subscriber.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all topics
-        
-        # Publisher for sending error messages
-        self.zmq_publisher = self.zmq_context.socket(zmq.PUB)
-        self.zmq_publisher.bind("tcp://*:5557")  # Bind to an address for error reporting
-        
-        # Start CAN command listener process
-        self.can_command_process = Process(target=self.listen_for_can_commands)
-        self.can_command_process.start()
-
     def report_error(self, error_code, error_message):
         """ Send a custom error message to the server """
         full_message = f"{error_code:x} {ERROR_CODES[error_code]}: {error_message}"
-        self.zmq_publisher.send_string(full_message)
+        self.send_status_to_server(full_message)
         print(f"[ERROR REPORT] Sent to server: {full_message}")
-
-    def listen_for_can_commands(self):
-        """ Listen for incoming CAN bus commands and perform actions accordingly. """
-        while True:
-            try:
-                message = self.zmq_subscriber.recv_string()
-                can_id, command = message.split(' ', 1)
-                can_id = int(can_id, 16)
-
-                if can_id in CAN_COMMANDS:
-                    print(f"[CAN COMMAND] Received: CAN ID: {can_id}, Command: {command}")
-                    self.execute_can_command(CAN_COMMANDS[can_id])
-                else:
-                    print(f"[CAN COMMAND] Unknown CAN ID: {can_id}")
-            except Exception as e:
-                self.report_error(0x403, f"CAN bus listener encountered an error: {e}")
 
     def execute_can_command(self, command):
         """ Execute actions based on received CAN command. """
@@ -260,8 +261,9 @@ class Owl:
             self.indicators.stop()
             self.image_recorder.stop()
 
-        self.can_command_process.terminate()
-        self.can_command_process.join()
+        # Disconnect from server
+        self.client_socket.close()
+        print("[INFO] Disconnected from server.")
 
         if self.show_display:
             cv2.destroyAllWindows()
@@ -291,9 +293,10 @@ if __name__ == "__main__":
 
     args = ap.parse_args()
 
-    owl = Owl(config_file='config/DAY_SENSITIVITY_2.ini',
-              show_display=args.show_display,
-              focus=args.focus,
-              input_file_or_directory=args.input)
+    owl_client = OwlClient(config_file='config/DAY_SENSITIVITY_2.ini',
+                           show_display=args.show_display,
+                           focus=args.focus,
+                           input_file_or_directory=args.input)
 
-    owl.hoot()
+    # Start the main processing loop
+    owl_client.hoot()
