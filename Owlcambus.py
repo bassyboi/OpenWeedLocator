@@ -5,7 +5,6 @@ import imutils
 import zmq  # Import ZeroMQ
 import time
 import sys
-import os
 from datetime import datetime
 from multiprocessing import Value, Process
 from configparser import ConfigParser
@@ -29,6 +28,14 @@ CAN_COMMANDS = {
     0x303: "boom_flush",
     0x304: "stop",
     0x305: "save_config"
+}
+
+# Define custom error types and codes
+ERROR_CODES = {
+    0x401: "Camera Error",
+    0x402: "Relay Error",
+    0x403: "Processing Error",
+    0x404: "Configuration Error"
 }
 
 class Owl:
@@ -60,11 +67,8 @@ class Owl:
         # Initialize image sampling configuration
         self._setup_image_sampling()
 
-        # Initialize ZeroMQ context and subscriber for CAN bus
+        # Initialize ZeroMQ context for CAN bus communication
         self._setup_can_bus()
-
-        # Initialize ZeroMQ publisher for error reporting
-        self._setup_error_reporting()
 
     def _setup_controller(self):
         """ Setup button controller and related multiprocessing """
@@ -86,61 +90,77 @@ class Owl:
         self.exp_compensation = self.config.getint('Camera', 'exp_compensation')
 
         # Setup input source (camera or file/directory)
-        if self.input_file_or_directory:
-            self.cam = FrameReader(path=self.input_file_or_directory, resolution=self.resolution, loop_time=self.config.getint('Visualisation', 'image_loop_time'))
-        else:
-            self.cam = VideoStream(resolution=self.resolution, exp_compensation=self.exp_compensation).start()
+        try:
+            if self.input_file_or_directory:
+                self.cam = FrameReader(path=self.input_file_or_directory, resolution=self.resolution, loop_time=self.config.getint('Visualisation', 'image_loop_time'))
+            else:
+                self.cam = VideoStream(resolution=self.resolution, exp_compensation=self.exp_compensation).start()
+            
+            self.frame_width = self.cam.frame_width
+            self.frame_height = self.cam.frame_height
         
-        self.frame_width = self.cam.frame_width
-        self.frame_height = self.cam.frame_height
+        except Exception as e:
+            self.report_error(0x401, f"Failed to initialize camera: {e}")
+            self.stop()
 
     def _setup_relays(self):
         """ Setup relay configurations from the config file """
-        self.relay_dict = {int(key): int(value) for key, value in self.config['Relays'].items()}
-        self.relay_controller = RelayController(relay_dict=self.relay_dict)
-        self.logger = self.relay_controller.logger
+        try:
+            self.relay_dict = {int(key): int(value) for key, value in self.config['Relays'].items()}
+            self.relay_controller = RelayController(relay_dict=self.relay_dict)
+            self.logger = self.relay_controller.logger
+        except Exception as e:
+            self.report_error(0x402, f"Relay setup error: {e}")
+            self.stop()
 
     def _setup_image_sampling(self):
         """ Setup image sampling settings if enabled """
         self.sample_images = self.config.getboolean('DataCollection', 'sample_images')
         if self.sample_images:
-            self.sample_method = self.config.get('DataCollection', 'sample_method')
-            self.disable_detection = self.config.getboolean('DataCollection', 'disable_detection')
-            self.sample_frequency = self.config.getint('DataCollection', 'sample_frequency')
-            self.enable_device_save = self.config.getboolean('DataCollection', 'enable_device_save')
-            self.save_directory = self.config.get('DataCollection', 'save_directory')
-            self.camera_name = self.config.get('DataCollection', 'camera_name')
+            try:
+                self.sample_method = self.config.get('DataCollection', 'sample_method')
+                self.disable_detection = self.config.getboolean('DataCollection', 'disable_detection')
+                self.sample_frequency = self.config.getint('DataCollection', 'sample_frequency')
+                self.enable_device_save = self.config.getboolean('DataCollection', 'enable_device_save')
+                self.save_directory = self.config.get('DataCollection', 'save_directory')
+                self.camera_name = self.config.get('DataCollection', 'camera_name')
 
-            self.indicators = StatusIndicator(save_directory=self.save_directory)
-            self.save_subdirectory = self.indicators.setup_directories(enable_device_save=self.enable_device_save)
-            self.indicators.start_storage_indicator()
-            self.image_recorder = ImageRecorder(save_directory=self.save_subdirectory, mode=self.sample_method)
+                self.indicators = StatusIndicator(save_directory=self.save_directory)
+                self.save_subdirectory = self.indicators.setup_directories(enable_device_save=self.enable_device_save)
+                self.indicators.start_storage_indicator()
+                self.image_recorder = ImageRecorder(save_directory=self.save_subdirectory, mode=self.sample_method)
+            except Exception as e:
+                self.report_error(0x404, f"Configuration error during image sampling setup: {e}")
+                self.stop()
 
     def _setup_can_bus(self):
-        """ Setup ZeroMQ context and subscriber for CAN bus """
+        """ Setup ZeroMQ context for CAN bus communication """
         self.zmq_context = zmq.Context()
-        self.zmq_socket = self.zmq_context.socket(zmq.SUB)
-        self.zmq_socket.connect("tcp://localhost:5555")  # Replace with your publisher's address
-        self.zmq_socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all topics
+
+        # Subscriber for receiving CAN commands
+        self.zmq_subscriber = self.zmq_context.socket(zmq.SUB)
+        self.zmq_subscriber.connect("tcp://localhost:5555")  # Replace with your publisher's address
+        self.zmq_subscriber.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all topics
+        
+        # Publisher for sending error messages
+        self.zmq_publisher = self.zmq_context.socket(zmq.PUB)
+        self.zmq_publisher.bind("tcp://*:5557")  # Bind to an address for error reporting
+        
+        # Start CAN command listener process
         self.can_command_process = Process(target=self.listen_for_can_commands)
         self.can_command_process.start()
 
-    def _setup_error_reporting(self):
-        """ Setup ZeroMQ publisher for error reporting """
-        self.error_context = zmq.Context()
-        self.error_socket = self.error_context.socket(zmq.PUB)
-        self.error_socket.connect("tcp://localhost:5556")  # Server address for error reporting
-
-    def report_error(self, error_message):
-        """ Send an error message to the server """
-        self.error_socket.send_string(f"[ERROR] {error_message}")
-        print(f"[ERROR REPORT] Sent to server: {error_message}")
+    def report_error(self, error_code, error_message):
+        """ Send a custom error message to the server """
+        full_message = f"{error_code:x} {ERROR_CODES[error_code]}: {error_message}"
+        self.zmq_publisher.send_string(full_message)
+        print(f"[ERROR REPORT] Sent to server: {full_message}")
 
     def listen_for_can_commands(self):
         """ Listen for incoming CAN bus commands and perform actions accordingly. """
         while True:
             try:
-                message = self.zmq_socket.recv_string()
+                message = self.zmq_subscriber.recv_string()
                 can_id, command = message.split(' ', 1)
                 can_id = int(can_id, 16)
 
@@ -150,7 +170,7 @@ class Owl:
                 else:
                     print(f"[CAN COMMAND] Unknown CAN ID: {can_id}")
             except Exception as e:
-                self.report_error(f"CAN bus listener encountered an error: {e}")
+                self.report_error(0x403, f"CAN bus listener encountered an error: {e}")
 
     def execute_can_command(self, command):
         """ Execute actions based on received CAN command. """
@@ -213,9 +233,7 @@ class Owl:
         except KeyboardInterrupt:
             self.stop()
         except Exception as e:
-            error_message = f"[CRITICAL ERROR] STOPPED: {e}"
-            self.logger.log_line(error_message, verbose=True)
-            self.report_error(error_message)  # Report the error to the server
+            self.report_error(0x403, f"Processing error: {e}")
             self.stop()
 
     def stop(self):
@@ -242,14 +260,17 @@ class Owl:
 
     def save_parameters(self):
         """ Save current configuration parameters to a new file. """
-        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-        new_config_filename = f"{timestamp}_{self._config_path.name}"
-        new_config_path = self._config_path.parent / new_config_filename
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            new_config_filename = f"{timestamp}_{self._config_path.name}"
+            new_config_path = self._config_path.parent / new_config_filename
 
-        # Update configuration parameters
-        # ... [existing parameter saving code remains unchanged]
+            # Update configuration parameters
+            # ... [existing parameter saving code remains unchanged]
 
-        print(f"[INFO] Configuration saved to {new_config_path}")
+            print(f"[INFO] Configuration saved to {new_config_path}")
+        except Exception as e:
+            self.report_error(0x404, f"Failed to save configuration: {e}")
 
 # Main script to run Owl system
 if __name__ == "__main__":
