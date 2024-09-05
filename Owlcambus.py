@@ -5,8 +5,12 @@ import imutils
 import zmq  # Import ZeroMQ
 import time
 import sys
+import logging  # Added
+import os  # Added
+import numpy as np  # Added
 from datetime import datetime
 from multiprocessing import Value, Process
+from threading import Thread  # Added
 from configparser import ConfigParser
 from pathlib import Path
 from imutils.video import FPS
@@ -15,8 +19,11 @@ from utils.button_inputs import BasicController
 from utils.image_sampler import ImageRecorder
 from utils.blur_algorithms import fft_blur
 from utils.greenonbrown import GreenOnBrown
+from utils.greenongreen import GreenOnGreen  # Added
 from utils.relay_control import RelayController, StatusIndicator
 from utils.frame_reader import FrameReader
+from utils.error_handler import ErrorHandler  # Added
+from utils.custom_logger import setup_logger  # Added
 
 def nothing(x):
     pass
@@ -40,6 +47,9 @@ ERROR_CODES = {
 
 class Owl:
     def __init__(self, show_display=False, focus=False, input_file_or_directory=None, config_file='config/DAY_SENSITIVITY_2.ini'):
+        # Initialize logging
+        setup_logger()  # Added custom logger setup
+
         # Initialize configuration
         self._config_path = Path(__file__).parent / config_file
         self.config = ConfigParser()
