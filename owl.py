@@ -27,26 +27,44 @@ def nothing(x):
 
 
 class Owl:
-    def __init__(self, show_display=False,
-                 focus=False,
-                 input_file_or_directory=None,
-                 config_file='config/DAY_SENSITIVITY_2.ini'):
+   def __init__(self, show_display=False, focus=False, input_file_or_directory=None, config_file='config/DAY_SENSITIVITY_2.ini'):
+        # Load configuration
+        self._load_configuration(config_file)
 
-        # start by reading the config file
+        # Initialize attributes
+        self.input_file_or_directory = input_file_or_directory
+        self.show_display = show_display
+        self.focus = focus
+
+        # Setup controller
+        self._setup_controller()
+
+        # Setup camera settings and thresholds
+        self._setup_camera()
+
+        # Initialize threshold adjustment UI if necessary
+        if self.show_display or self.focus:
+            self._setup_threshold_adjustment_ui()
+
+        # Initialize relay controller
+        self._setup_relay_controller()
+
+        # Setup video input source (camera or file)
+        self._setup_video_source()
+
+        # Setup data collection if enabled
+        if self.config.getboolean('DataCollection', 'sample_images'):
+            self._setup_data_collection()
+
+        # Additional setup for relay control and lane calculations
+        self._setup_lane_coordinates()
+
+    def _load_configuration(self, config_file):
         self._config_path = Path(__file__).parent / config_file
         self.config = ConfigParser()
         self.config.read(self._config_path)
 
-        # is the source a directory/file
-        self.input_file_or_directory = input_file_or_directory
-
-        # visualise the detections with video feed
-        self.show_display = show_display
-
-        # WARNING: option disable detection for data collection
-        self.disable_detection = False
-
-        # initialise controller buttons and async management
+    def _setup_controller(self):
         self.enable_controller = self.config.getboolean('Controller', 'enable_controller')
         self.switch_purpose = self.config.get('Controller', 'switch_purpose')
         self.switch_pin = self.config.getint('Controller', 'switch_pin')
@@ -55,26 +73,23 @@ class Owl:
             self.detection_state = Value('b', False)
             self.sample_state = Value('b', False)
             self.stop_flag = Value('b', False)
-            self.basic_controller = BasicController(detection_state=self.detection_state,
-                                                    sample_state=self.sample_state,
-                                                    stop_flag=self.stop_flag,
-                                                    switch_board_pin=f'BOARD{self.switch_pin}',
-                                                    switch_purpose=self.switch_purpose)
-
+            self.basic_controller = BasicController(
+                detection_state=self.detection_state,
+                sample_state=self.sample_state,
+                stop_flag=self.stop_flag,
+                switch_board_pin=f'BOARD{self.switch_pin}',
+                switch_purpose=self.switch_purpose
+            )
             self.basic_controller_process = Process(target=self.basic_controller.run)
             self.basic_controller_process.start()
 
-        self.relay_vis = None
-
-        self.focus = focus
-        if self.focus:
-            self.show_display = True
-
-        self.resolution = (self.config.getint('Camera', 'resolution_width'),
-                           self.config.getint('Camera', 'resolution_height'))
+    def _setup_camera(self):
+        self.resolution = (
+            self.config.getint('Camera', 'resolution_width'),
+            self.config.getint('Camera', 'resolution_height')
+        )
         self.exp_compensation = self.config.getint('Camera', 'exp_compensation')
-
-        # threshold parameters for different algorithms
+        # Threshold parameters for different algorithms
         self.exgMin = self.config.getint('GreenOnBrown', 'exgMin')
         self.exgMax = self.config.getint('GreenOnBrown', 'exgMax')
         self.hueMin = self.config.getint('GreenOnBrown', 'hueMin')
@@ -84,126 +99,85 @@ class Owl:
         self.brightnessMin = self.config.getint('GreenOnBrown', 'brightnessMin')
         self.brightnessMax = self.config.getint('GreenOnBrown', 'brightnessMax')
 
-        self.threshold_dict = {}
-        # time spent on each image when looping over a directory
-        self.image_loop_time = self.config.getint('Visualisation', 'image_loop_time')
-
-        # setup the track bars if show_display is True
-        if self.show_display:
-            # create trackbars for the threshold calculation
-            self.window_name = "Adjust Detection Thresholds"
-            cv2.namedWindow("Adjust Detection Thresholds", cv2.WINDOW_AUTOSIZE)
-            cv2.createTrackbar("ExG-Min", self.window_name, self.exgMin, 255, nothing)
-            cv2.createTrackbar("ExG-Max", self.window_name, self.exgMax, 255, nothing)
-            cv2.createTrackbar("Hue-Min", self.window_name, self.hueMin, 179, nothing)
-            cv2.createTrackbar("Hue-Max", self.window_name, self.hueMax, 179, nothing)
-            cv2.createTrackbar("Sat-Min", self.window_name, self.saturationMin, 255, nothing)
-            cv2.createTrackbar("Sat-Max", self.window_name, self.saturationMax, 255, nothing)
-            cv2.createTrackbar("Bright-Min", self.window_name, self.brightnessMin, 255, nothing)
-            cv2.createTrackbar("Bright-Max", self.window_name, self.brightnessMax, 255, nothing)
-
-        # Relay Dict maps the reference relay number to a boardpin on the embedded device
-        self.relay_dict = {}
-
-        # use the [Relays] section to build the dictionary
-        for key, value in self.config['Relays'].items():
-            self.relay_dict[int(key)] = int(value)
-
-        # instantiate the relay controller - successful start should beep the buzzer
-        self.relay_controller = RelayController(relay_dict=self.relay_dict)
-
-        # instantiate the logger
-        self.logger = self.relay_controller.logger
-
-        # check that the resolution is not so high it will entirely brick/destroy the OWL.
+        # Ensure resolution isn't too high
         total_pixels = self.resolution[0] * self.resolution[1]
         if total_pixels > (832 * 640):
-            # change here if you want to test higher resolutions, but be warned, backup your current image!
             self.resolution = (416, 320)
             self.logger.log_line(f"[WARNING] Resolution {self.config.getint('Camera', 'resolution_width')}, "
-                                 f"{self.config.getint('Camera', 'resolution_height')} selected is dangerously high. ",
+                                 f"{self.config.getint('Camera', 'resolution_height')} selected is dangerously high.",
                                  verbose=True)
 
-        # check if test video or videostream from camera
-        # is the source a directory/file
+    def _setup_threshold_adjustment_ui(self):
+        self.window_name = "Adjust Detection Thresholds"
+        cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
+        cv2.createTrackbar("ExG-Min", self.window_name, self.exgMin, 255, nothing)
+        cv2.createTrackbar("ExG-Max", self.window_name, self.exgMax, 255, nothing)
+        cv2.createTrackbar("Hue-Min", self.window_name, self.hueMin, 179, nothing)
+        cv2.createTrackbar("Hue-Max", self.window_name, self.hueMax, 179, nothing)
+        cv2.createTrackbar("Sat-Min", self.window_name, self.saturationMin, 255, nothing)
+        cv2.createTrackbar("Sat-Max", self.window_name, self.saturationMax, 255, nothing)
+        cv2.createTrackbar("Bright-Min", self.window_name, self.brightnessMin, 255, nothing)
+        cv2.createTrackbar("Bright-Max", self.window_name, self.brightnessMax, 255, nothing)
+
+    def _setup_relay_controller(self):
+        self.relay_dict = {int(key): int(value) for key, value in self.config['Relays'].items()}
+        self.relay_controller = RelayController(relay_dict=self.relay_dict)
+        self.logger = self.relay_controller.logger
+
+    def _setup_video_source(self):
         if len(self.config.get('System', 'input_file_or_directory')) > 0:
             self.input_file_or_directory = self.config.get('System', 'input_file_or_directory')
 
-        self.input_file_or_directory = input_file_or_directory
-
-        if len(self.config.get('System', 'input_file_or_directory')) > 0 and input_file_or_directory is not None:
+        if len(self.config.get('System', 'input_file_or_directory')) > 0 and self.input_file_or_directory is not None:
             print('[WARNING] two paths to image/videos provided. Defaulting to the command line flag.')
 
         if self.input_file_or_directory:
-            self.cam = FrameReader(path=self.input_file_or_directory,
-                                   resolution=self.resolution,
-                                   loop_time=self.image_loop_time)
+            self.cam = FrameReader(
+                path=self.input_file_or_directory,
+                resolution=self.resolution,
+                loop_time=self.config.getint('Visualisation', 'image_loop_time')
+            )
             self.frame_width, self.frame_height = self.cam.resolution
-
             self.logger.log_line(f'[INFO] Using {self.cam.input_type} from {self.input_file_or_directory}...', verbose=True)
-
-        # if no video, start the camera with the provided parameters
         else:
-
             try:
-                self.cam = VideoStream(resolution=self.resolution,
-                                       exp_compensation=self.exp_compensation)
+                self.cam = VideoStream(
+                    resolution=self.resolution,
+                    exp_compensation=self.exp_compensation
+                )
                 self.cam.start()
-
                 self.frame_width = self.cam.frame_width
                 self.frame_height = self.cam.frame_height
-
             except ModuleNotFoundError as e:
                 missing_module = str(e).split("'")[-2]
                 error_message = f"Missing required module: {missing_module}. Please install it and try again."
-
                 raise ModuleNotFoundError(error_message) from None
-
             except Exception as e:
                 error_detail = f"[CRITICAL ERROR] Stopped OWL at start: {e}"
                 self.logger.log_line(error_detail, verbose=True)
                 self.relay_controller.relay.beep(duration=1, repeats=1)
                 time.sleep(2)
-
                 sys.exit(1)
 
-        time.sleep(1.0)
+    def _setup_data_collection(self):
+        self.sample_method = self.config.get('DataCollection', 'sample_method')
+        self.disable_detection = self.config.getboolean('DataCollection', 'disable_detection')
+        self.sample_frequency = self.config.getint('DataCollection', 'sample_frequency')
+        self.enable_device_save = self.config.getboolean('DataCollection', 'enable_device_save')
+        self.save_directory = self.config.get('DataCollection', 'save_directory')
+        self.camera_name = self.config.get('DataCollection', 'camera_name')
 
-        ### Data collection only ###
-        self.sample_images = self.config.getboolean('DataCollection', 'sample_images')
+        self.indicators = StatusIndicator(save_directory=self.save_directory)
+        self.save_subdirectory = self.indicators.setup_directories(enable_device_save=self.enable_device_save)
+        self.indicators.start_storage_indicator()
 
-        if self.sample_images:
-            self.sample_method = self.config.get('DataCollection', 'sample_method')
-            self.disable_detection = self.config.getboolean('DataCollection', 'disable_detection')
-            self.sample_frequency = self.config.getint('DataCollection', 'sample_frequency')
-            self.enable_device_save = self.config.getboolean('DataCollection', 'enable_device_save')
-            self.save_directory = self.config.get('DataCollection', 'save_directory')
-            self.camera_name = self.config.get('DataCollection', 'camera_name')
+        self.image_recorder = ImageRecorder(save_directory=self.save_subdirectory, mode=self.sample_method)
 
-            self.indicators = StatusIndicator(save_directory=self.save_directory)
-            self.save_subdirectory = self.indicators.setup_directories(enable_device_save=self.enable_device_save)
-            self.indicators.start_storage_indicator()
-
-            self.image_recorder = ImageRecorder(save_directory=self.save_subdirectory, mode=self.sample_method)
-
-        ############################
-
-        # sensitivity and weed size to be added
-        self.sensitivity = None
-        self.lane_coords = {}
-
-        # add the total number of relays being controlled. This can be changed easily, but the relay_dict and physical relays would need
-        # to be updated too. Fairly straightforward, so an opportunity for more precise application
+    def _setup_lane_coordinates(self):
         self.relay_num = self.config.getint('System', 'relay_num')
-
-        # activation region limit - once weed crosses this line, relay is activated
         self.yAct = int(0.01 * self.frame_height)
         self.lane_width = self.frame_width / self.relay_num
-
-        # calculate lane coords and draw on frame
-        for i in range(self.relay_num):
-            laneX = int(i * self.lane_width)
-            self.lane_coords[i] = laneX
+        self.lane_coords = {i: int(i * self.lane_width) for i in range(self.relay_num)}
 
     def hoot(self):
         algorithm = self.config.get('System', 'algorithm')
