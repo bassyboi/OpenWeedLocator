@@ -1,29 +1,42 @@
 #!/bin/bash
 
 # Single .sh file to install Google Coral requirements for the Raspberry Pi
-# Adapted from https://coral.ai/docs/accelerator/get-started/#1-install-the-edge-tpu-runtime with assistance from ChatGPT
+# Adapted to install specific versions of libedgetpu, tflite_runtime, and pycoral
 
 # Update and upgrade existing packages
 sudo apt-get update
-sudo apt-get upgrade
+sudo apt-get upgrade -y
 
-echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
+# Install dependencies
+sudo apt-get install -y wget
 
-curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+# Step 1: Download and install libedgetpu version 16.0TF2.17.0-1
+echo "Downloading libedgetpu version 16.0TF2.17.0-1..."
+wget https://github.com/feranick/libedgetpu/releases/download/16.0TF2.17.0-1/libedgetpu1-16.0TF2.17.0-1_arm64.deb
 
-sudo apt-get update
+echo "Installing libedgetpu..."
+sudo dpkg -i libedgetpu1-16.0TF2.17.0-1_arm64.deb
 
-echo "Do you want to install with MAX OPERATING FREQUENCY? Doing so will increase framerate but also device temperature and power consumption."
-echo "Check official Google Coral documentation for full differences: https://coral.ai/docs/accelerator/get-started/"
-read -r -p "Install MAX OPERATING FREQUENCY? [y/N] " response
-if [[ "$response" =~ ^([yY][eE][sS]|[yY])+$ ]]
-then
-    echo "Installing MAX OPERATING FREQUENCY..."
-    sudo apt-get install libedgetpu1-max
-else
-    echo "Installing STANDARD OPERATING FREQUENCY..."
-    sudo apt-get install libedgetpu1-std
-fi
+# Fix any missing dependencies
+sudo apt-get install -f -y
+
+# Step 2: Download and install tflite_runtime version 2.17.0
+echo "Downloading tflite_runtime version 2.17.0..."
+wget https://github.com/feranick/TFlite-builds/releases/download/v2.17.0/tflite_runtime-2.17.0-cp39-cp39-linux_aarch64.whl
+
+echo "Installing tflite_runtime..."
+sudo pip3 install tflite_runtime-2.17.0-cp39-cp39-linux_aarch64.whl
+
+# Step 3: Uninstall existing pycoral
+echo "Uninstalling existing pycoral..."
+sudo pip3 uninstall -y pycoral
+
+# Step 4: Download and install pycoral version 2.0.2
+echo "Downloading pycoral version 2.0.2..."
+wget https://github.com/google-coral/pycoral/releases/download/v2.0.2/pycoral-2.0.2-cp39-cp39-linux_aarch64.whl
+
+echo "Installing pycoral..."
+sudo pip3 install pycoral-2.0.2-cp39-cp39-linux_aarch64.whl
 
 # Check if Google Coral is installed
 while true; do
@@ -38,21 +51,17 @@ while true; do
   fi
 done
 
-echo "The pycoral library will now be installed."
+# Link the installed packages to the 'owl' virtual environment
+echo "Linking pycoral and tflite_runtime to the virtual environment..."
 
-sudo apt-get install python3-pycoral
+# Specify the path to your 'owl' virtual environment
+OWL_VENV_PATH="/path/to/your/owl/venv"  # Replace with the actual path
 
-# Link the system wide installation to the OWL virtual environment 
-# Find the directories containing pycoral and tflite
-PYCORAL_DIRS=$(find /usr/lib/python3/dist-packages -name "*pycoral*" -type d)
-TFLITE_DIRS=$(find /usr/lib/python3/dist-packages -name "*tflite*" -type d)
+# Find the site-packages directory of the 'owl' virtual environment
+OWL_SITE_PACKAGES="$OWL_VENV_PATH/lib/python3.9/site-packages"
 
-# Find the site-packages directory of the virtual environment 'owl'
-OWL_SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])" | grep owl | xargs)
+# Copy the installed packages to the virtual environment
+sudo cp -r /usr/local/lib/python3.9/dist-packages/pycoral* "$OWL_SITE_PACKAGES"
+sudo cp -r /usr/local/lib/python3.9/dist-packages/tflite_runtime* "$OWL_SITE_PACKAGES"
 
-# Copy the directories containing pycoral and tflite to the site-packages directory
-for DIR in $PYCORAL_DIRS $TFLITE_DIRS; do
-    cp -r $DIR $OWL_SITE_PACKAGES
-done
-
-
+echo "Installation completed successfully!"
