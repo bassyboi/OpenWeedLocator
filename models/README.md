@@ -1,100 +1,285 @@
-# Adding Green-on-Green to the OWL (beta)
-Welcome to the first iteration of Green-on-Green or in-crop weed detection with the OWL. This is still an early beta version, so it may require additional troubleshooting. It has been tested and works on both a Raspberry Pi 4, LibreComputer and a Windows desktop computer.
+Adding Green-on-Green to the OWL (beta) with Hailo AI and YOLO Models
 
-## Stage 1| Hardware/Software - Google Coral Installation
-In addition to the other software installation to get the OpenWeedLocator running, you will also need to install the Google Coral supporting software onto the Raspberry Pi. Simply run `install_coral.sh` from the command line using the instructions below. 
+Welcome to the first iteration of Green-on-Green (in-crop weed detection) with the OpenWeedLocator (OWL) using Hailo AI hardware and YOLO models. This is an early beta version and may require additional troubleshooting. It has been tested and works on both a Raspberry Pi 5 and a Windows desktop computer.
+Stage 1 | Hardware/Software - Hailo AI Installation
 
-### Step 1
-Assuming you have cloned the OpenWeedLocator repository and renamed it to `owl`, navigate to the `models` directory on the Raspberry Pi with:
+In addition to the standard software required to run the OWL, you'll need to install the Hailo SDK on your Raspberry Pi 5. Follow the instructions below to set up the Hailo AI environment.
+Step 1: Download Hailo SDK
 
-`owl@raspberrypi:~ $ cd ~/owl/models`
+First, you need to download the Hailo SDK suitable for your Raspberry Pi 5. Visit the Hailo Developer Zone to get the latest SDK package.
 
-### Step 2
-Now run the installation file. This will install the `pycoral` library and other important packages to run the Coral. For full instructions on the installation process, we recommend reading  the Google Coral [documentation](https://coral.ai/docs/accelerator/get-started/).
+Alternatively, you can download it directly to your Raspberry Pi using the command line (make sure to update the URL to the latest version):
 
-During the installation, you will be asked to confirm performance options and connect the Google Coral USB to the USB3.0 ports (blue). 
+bash
 
-`owl@raspberrypi:~ $ chmod +x install_coral.sh && ./install_coral.sh`.
+wget https://hailo.ai/wp-content/uploads/2021/10/hailo-sdk-4.15.0-1.deb
 
-If you run into errors during the `pycoral` library installation, try running 
+(Note: Replace the URL with the latest SDK version available on the Hailo website.)
+Step 2: Install the SDK
 
-```
-owl@raspberrypi:~ $ workon owl
-(owl) owl@raspberrypi:~/owl/models$ pip install pycoral
-```
+Install the SDK package using dpkg:
 
-### Step 3
-The final step is to test the installation.
+bash
 
-Open up a Python terminal by running:
-```
-(owl) owl@raspberrypi:~/owl/models$ python
-```
+sudo dpkg -i hailo-sdk-4.15.0-1.deb
 
-Now try running:
-```
->>> import pycoral
-```
+If you encounter dependency issues, run:
 
-If this runs successfully then you're ready to move on to the next step and running object detection models with the OWL.
+bash
 
-## Stage 2 | Model Training/Deployment - Inference with the Coral
-Running weed recognition models on the Google Coral requires the generation of a .tflite model file. The .tflite files are specifically designed to be lightweight and efficient, making them well-suited for deployment on edge devices like the Coral USB TPU. One important thing to note is that .tflite files for the Google Coral are specifically optimized for it, so you cannot simply use any .tflite file. Using a generic .tflite file may result in much slower performance or even failure to run.
+sudo apt-get install -f
 
-This is an overview of the process from the official Google Coral documentation:
-![image](https://user-images.githubusercontent.com/51358498/226113545-9b642d75-f611-4ff5-a613-5e684822e619.png)
+Then, re-run the installation command:
 
-### Step 1
-To test if the installation has worked, the recommended option is to download a generic model file first from the [Coral model repository](https://coral.ai/models/object-detection/). This will isolate any issues with it running to the OWL or the Google Coral installation, rather than the model training. 
+bash
 
-While still in the `models` directory, run this command to download the appropriate model:
-```
-(owl) owl@raspberrypi:~/owl/models$ wget https://raw.githubusercontent.com/google-coral/test_data/master/ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite
-```
+sudo dpkg -i hailo-sdk-4.15.0-1.deb
 
-Now change back to the `owl` directory and try running `owl.py` and specifying `gog` for the algorithm. If you don't specify a path to the `.tflite` model file, it will automatically select the first model in the directory when sorted alphabetically.
+Step 3: Set Up Environment Variables
 
-**NOTE** If you are testing this inside, the camera settings will likely be too dark (and the image will appear entirely black) so you may also need to specify the `--exp-compensation 4` and `--exp-mode auto`. 
+After installing the SDK, you need to set up the environment variables. Run:
 
-```
-(owl) owl@raspberrypi:~/owl/models$ cd ..
-(owl) owl@raspberrypi:~/owl$python owl.py --show-display --algorithm gog
-```
+bash
 
-If this runs correctly, a video feed just like the previous green-on-brown approach should appear with a red box around an 'object', which in this case has been filtered to only detect 'potted plants'. If you would like to detect any of the other COCO categories, simply change the `filter_id=63` to a different category. The full list is [available here](https://tech.amikelive.com/node-718/what-object-categories-labels-are-in-coco-dataset/).
+source /usr/local/hailo_sdk/setup_env.sh
 
-Once you have confirmed it is working, you will need to start training and deploying your own weed recognition models.
+To make this change permanent, add the command to your ~/.bashrc file:
 
-There are two main ways to generate optimized, weed recognition .tflite files for the Coral. These are detailed below.
+bash
 
-### Option 1 | Train a model using Tensorflow
-These instructions by EdjeElectronics provide a step-by-step to a working .tflite Edge TPU model file. 
-* [Google Colab walkthrough](https://colab.research.google.com/github/EdjeElectronics/TensorFlow-Lite-Object-Detection-on-Android-and-Raspberry-Pi/blob/master/Train_TFLite2_Object_Detction_Model.ipynb)
-* [Accompanying YouTube video](https://www.youtube.com/watch?v=XZ7FYAMCc4M&ab_channel=EdjeElectronics)
+echo "source /usr/local/hailo_sdk/setup_env.sh" >> ~/.bashrc
 
-There is also the [official Google Colab tutorial](https://colab.research.google.com/github/google-coral/tutorials/blob/master/retrain_ssdlite_mobiledet_qat_tf1.ipynb) from the Coral documentation, that walks you through the entire training process for custom datasets.
+Step 4: Install Additional Dependencies
 
-### Train a YOLO v5/v8 model and export as .tflite 
-** NOTE ** it appears this method isn't currently working consistently. Once this resolves, this will be the recommended approach, given the ease of training for YOLO models and the relatively high performance. You can track one of the issues on the Ultralytics repository [here](https://github.com/ultralytics/ultralytics/issues/1185).
+Install any additional dependencies required by the Hailo SDK and your application:
 
-To train a YOLOv5 model from Weed-AI, check out this notebook we have for [Weed-AI datasets](https://colab.research.google.com/github/Weed-AI/Weed-AI/blob/master/weed_ai_yolov5.ipynb)). Once it is trained, you must export it using either of the following commands:
+bash
 
-#### YOLOv5
-`!python export.py --weights path/to/your/weights/best.pt --include edgetpu`
-#### YOLOv8
-`!yolo export model=path/to/your/weights/best.pt format=edgetpu`
+sudo apt-get update
+sudo apt-get install -y python3-pip python3-opencv libopencv-dev
+pip3 install numpy
 
-The full explanation for each method is available in the [Ultralytics YOLOv5](https://github.com/ultralytics/yolov5)
-or [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) repositories.
+Step 5: Verify the Installation
 
-Currently, the `GreenOnGreen` class will simply either load the first (alphabetically) model in the directory if specified with
-`algorithm='gog'` or will load the model specified if `algorithm=path/to/model.tflite`. Importantly, all your classes must
-appear in the `labels.txt` file.
+To ensure the SDK is correctly installed, run one of the sample applications provided by Hailo:
 
-This is a very early version of the approach, so it is subject to change.
+bash
 
-## References
-These are some of the sources used in the development of this aspect of the project.
+cd /usr/local/hailo_sdk/samples/common/python/classification
+python3 classification_example.py
 
-1. [PyImageSearch](https://pyimagesearch.com/2019/05/13/object-detection-and-image-classification-with-google-coral-usb-accelerator/)
-2. [Google Coral Guides](https://coral.ai/docs/accelerator/get-started/)
+If the sample runs successfully and outputs classification results, your Hailo SDK installation is complete.
+Stage 2 | Model Training/Deployment - Inference with Hailo AI and YOLO Models
+
+Running weed recognition models on the Hailo AI hardware requires compiling your trained model into a Hailo Executable Format (.hef) file using the Hailo Dataflow Compiler. In this section, we'll focus on using YOLO models, which are well-suited for object detection tasks like weed detection.
+Option 1 | Using a Pre-Trained YOLO Model from Hailo Model Zoo
+
+Hailo provides pre-compiled YOLO models in their Model Zoo, which you can use directly.
+Step 1: Download a Sample HEF YOLO Model
+
+Navigate to the models directory in your OWL repository:
+
+bash
+
+cd ~/owl/models
+
+Download a sample YOLOv5 HEF model, such as the YOLOv5s model trained on the COCO dataset:
+
+bash
+
+wget https://hailo.ai/wp-content/uploads/2021/05/yolov5s_coco.hef
+
+(Note: Ensure the download link is up-to-date by checking the Hailo Model Zoo.)
+Step 2: Obtain the Labels File
+
+Download the labels file corresponding to the COCO dataset:
+
+bash
+
+wget https://raw.githubusercontent.com/ultralytics/yolov5/master/data/coco.names -O labels.txt
+
+Step 3: Test the Model with OWL
+
+Change back to the OWL directory and run owl.py with the Green-on-Green algorithm:
+
+bash
+
+cd ~/owl
+python3 owl.py --show-display --algorithm gog
+
+If you're testing indoors and the image appears dark, adjust the camera settings:
+
+bash
+
+python3 owl.py --show-display --algorithm gog --exp-compensation 4 --exp-mode auto
+
+A video feed should appear, showing detections with red bounding boxes. By default, the code filters for 'potted plants' (class ID 63). To detect other categories, change the filter_id parameter in the inference method or pass it as a command-line argument.
+Step 4: Verify the Detection
+
+If the application runs correctly and you see detections on the video feed, your setup is working. You can proceed to train and deploy your own weed recognition YOLO models.
+Option 2 | Train and Deploy Custom YOLO Models Using Hailo SDK
+
+To detect specific weeds, you'll need to train a custom YOLO model and compile it for the Hailo AI hardware.
+Step 1: Prepare Your Dataset
+
+Gather images of weeds and crops to create a dataset. Label the images using annotation tools like LabelImg or Roboflow. Ensure that your annotations are in the YOLO format.
+Step 2: Train Your YOLO Model
+
+You can use YOLOv5 or YOLOv8 from Ultralytics to train your model.
+Using YOLOv5
+
+    Clone the YOLOv5 Repository:
+
+    bash
+
+git clone https://github.com/ultralytics/yolov5.git
+cd yolov5
+pip install -r requirements.txt
+
+Prepare Your Dataset:
+
+Organize your dataset according to the YOLOv5 directory structure and create a dataset YAML file.
+
+Train the Model:
+
+bash
+
+    python train.py --img 640 --batch 16 --epochs 100 --data your_dataset.yaml --weights yolov5s.pt --cache
+
+Using YOLOv8
+
+    Install Ultralytics YOLOv8:
+
+    bash
+
+pip install ultralytics
+
+Train the Model:
+
+bash
+
+    yolo train model=yolov8s.pt data=your_dataset.yaml epochs=100 imgsz=640
+
+Step 3: Export the Model to ONNX Format
+
+After training, export the model to ONNX format, which is compatible with the Hailo Dataflow Compiler.
+For YOLOv5:
+
+bash
+
+python export.py --weights runs/train/exp/weights/best.pt --include onnx
+
+For YOLOv8:
+
+bash
+
+yolo export model=runs/detect/train/weights/best.pt format=onnx
+
+Step 4: Compile the Model with Hailo Dataflow Compiler
+
+Use the Hailo SDK to compile your ONNX model into a HEF file.
+
+bash
+
+hailomvc compile -m best.onnx -o models/your_model.hef
+
+(Note: The hailomvc command is part of the Hailo SDK and may have specific parameters you need to set. Refer to the Hailo SDK documentation for details.)
+
+Important: YOLO models may require specific pre- and post-processing steps, and the Hailo compiler may have templates or examples for compiling YOLO models. Check the Hailo documentation or examples for compiling YOLO models to HEF.
+Step 5: Update the Labels File
+
+Create or update the labels.txt file with your custom classes. Each line should contain a class name corresponding to the class indices used during training.
+
+Example labels.txt:
+
+0 Thistle
+1 Dandelion
+2 Crop
+
+Step 6: Adjust the Inference Code
+
+Ensure that your GreenOnGreen class and inference code handle the YOLO model's output format. YOLO models output bounding boxes, class IDs, and confidence scores in a specific format.
+
+Update the inference method in your code to parse the outputs accordingly.
+
+Here's an example of how you might adjust the inference method:
+
+python
+
+def inference(self, image, confidence=0.5, filter_id=0):
+    # Preprocess the image
+    input_image = cv2.resize(image, (self.input_width, self.input_height))
+    input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
+    input_image = input_image.astype(np.float32) / 255.0
+    input_image = np.transpose(input_image, (2, 0, 1))  # Convert to CHW format if required
+    input_image = np.expand_dims(input_image, axis=0)
+
+    # Run inference
+    self.input_vstreams.write([input_image])
+
+    # Read output data from the output VStreams
+    output_data = self.output_vstreams.read()
+
+    # Process the outputs according to YOLO format
+    detections = self.post_process_outputs(output_data)
+
+    # Now process the detections
+    self.weed_centers = []
+    self.boxes = []
+
+    for detection in detections:
+        class_id = int(detection['class_id'])
+        score = detection['score']
+        bbox = detection['bbox']  # [xmin, ymin, xmax, ymax] normalized coordinates
+
+        if score >= confidence and class_id == filter_id:
+            # Scale the bounding box back to the original image size
+            xmin, ymin, xmax, ymax = bbox
+            startX = int(xmin * image.shape[1])
+            startY = int(ymin * image.shape[0])
+            endX = int(xmax * image.shape[1])
+            endY = int(ymax * image.shape[0])
+
+            boxW = endX - startX
+            boxH = endY - startY
+
+            # Save the bounding box
+            self.boxes.append([startX, startY, boxW, boxH])
+            # Compute box center
+            centerX = int(startX + (boxW / 2))
+            centerY = int(startY + (boxH / 2))
+            self.weed_centers.append([centerX, centerY])
+
+            percent = int(100 * score)
+            label = f'{percent}% {self.labels.get(class_id, class_id)}'
+            cv2.rectangle(image, (startX, startY), (endX, endY), (0, 0, 255), 2)
+            cv2.putText(image, label, (startX, startY + 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
+    return None, self.boxes, self.weed_centers, image
+
+Ensure that you implement the post_process_outputs method to handle YOLO-specific post-processing, such as decoding the outputs and applying Non-Maximum Suppression (NMS). The exact implementation will depend on the output format of your YOLO model compiled for Hailo.
+
+Note: The Hailo SDK may provide utilities or examples for handling YOLO model outputs. Refer to the Hailo documentation or example projects for guidance.
+Step 7: Run the OWL Application with Your Custom YOLO Model
+
+Execute the owl.py script with your custom HEF model:
+
+bash
+
+python3 owl.py --show-display --algorithm models/your_model.hef
+
+Ensure the algorithm parameter points to your .hef file. Adjust the filter_id to match the class ID of the weed you want to detect.
+References
+
+These resources were helpful in developing this aspect of the project:
+
+    Hailo Developer Zone
+    Hailo SDK Documentation
+    Hailo Model Zoo
+    Hailo GitHub Examples
+    Ultralytics YOLOv5 Repository
+    Ultralytics YOLOv8 Repository
+    YOLOv5 Export Tutorial
+    Hailo YOLOv5 Example
+
+Note: This is an early version of the approach and may be subject to change. If you encounter issues or have suggestions for improvement, please contribute to the project or reach out to the maintainers.
