@@ -282,4 +282,6 @@ These resources were helpful in developing this aspect of the project:
     YOLOv5 Export Tutorial
     Hailo YOLOv5 Example
 
+    https://www.youtube.com/redirect?event=video_description&redir_token=QUFFLUhqa0g4Y0xtSUd5UXhWOGtISjRjR2htcVI1bHR3Z3xBQ3Jtc0tuSWpXeExQMHdlLUVrNzVGZlQwMzM3Y3ZWVndJazAtb1VzUWRpTk45NzcwX0FhUXJyS2hVZFJMdkRBUmU2WnROcldnQmxBQnl4WXlaRS1RbFhlSWNHa2Y5VnAwVlM0YTRDWmRkRkl2UTlHTjBVaGlBYw&q=https%3A%2F%2Fmy.cytron.io%2Ftutorial%2Fraspberry-pi-ai-kit-custom-object-detection-with-h%3Fr%3D1&v=7pgSFgqo8gY
+
 Note: This is an early version of the approach and may be subject to change. If you encounter issues or have suggestions for improvement, please contribute to the project or reach out to the maintainers.
